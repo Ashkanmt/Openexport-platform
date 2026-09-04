@@ -241,7 +241,26 @@ const RFQ_SEED = [
   { id: "r8", buyerId: "b7", productId: "yellow-peas", qty: 3000, destination: "India", destPort: "Nhava Sheva", delivery: "February 2027", grade: "Canada No. 1", packaging: "Bulk", incoterm: "CIF", payment: "Letter of Credit", certRequired: true, postedDaysAgo: 7, expiresOn: daysLeft(6), notes: "Fumigation certificate required on arrival." },
   { id: "r9", buyerId: "b8", productId: "oats", qty: 1500, destination: "Germany", destPort: "Hamburg", delivery: "November 2026", grade: "Canada No.1", packaging: "Bulk", incoterm: "CIF", payment: "T/T", certRequired: true, postedDaysAgo: 2, expiresOn: daysLeft(12), notes: "" },
   { id: "r10", buyerId: "b9", productId: "red-lentils", qty: 300, destination: "Canada (Domestic)", destPort: "Toronto, ON (rail/truck)", delivery: "October 2026", grade: "Canada No. 1", packaging: "25kg bags", incoterm: "DAP", payment: "T/T", certRequired: false, postedDaysAgo: 1, expiresOn: daysLeft(15), notes: "Domestic delivery — no ocean freight required." },
-];
+].map((r) => ({ ...r, isDemo: true }));
+
+// Converts a real row from the Supabase `rfqs` table into the exact
+// same shape as the demo RFQ_SEED objects above, so every component
+// that already renders RFQs can display real ones without changes.
+function dbRfqToLocal(row) {
+  const createdAt = new Date(row.created_at);
+  const postedDaysAgo = Math.max(0, Math.floor((Date.now() - createdAt.getTime()) / 86400000));
+  const expires = new Date(createdAt);
+  expires.setDate(expires.getDate() + 14);
+  return {
+    id: row.id, buyerId: null, buyerName: row.company_name, buyerVerification: 2,
+    productId: row.product_id, qty: row.quantity, destination: row.destination,
+    destPort: (PORTS.dest && PORTS.dest[row.destination]) || "—",
+    delivery: row.delivery_window || "To be confirmed", grade: row.grade || "—",
+    packaging: row.packaging || "—", incoterm: row.incoterm || "—", payment: row.payment || "—",
+    certRequired: !!row.cert_required, notes: row.notes || "",
+    postedDaysAgo, expiresOn: expires.toISOString().slice(0, 10), isDemo: false,
+  };
+}
 
 // Resolves buyer display info for an RFQ whether it came from the seed
 // data (has a buyerId into the demo BUYERS list) or was just submitted
@@ -797,6 +816,7 @@ function Home({ onNav, rfqs, suppliers }) {
                     </div>
                     <div style={{ fontSize: 10.5, color: COLORS.textMut, marginTop: 3, display: "flex", gap: 8, alignItems: "center" }}>
                       <Clock size={10} /> {r.postedDaysAgo === 0 ? "Today" : `${r.postedDaysAgo}d ago`} · Delivery {r.delivery}
+                      {r.isDemo && <span style={{ fontSize: 8.5, textTransform: "uppercase", letterSpacing: "0.04em", color: COLORS.textMut, border: `1px solid ${COLORS.border}`, borderRadius: 3, padding: "1px 5px" }}>demo</span>}
                     </div>
                   </div>
                 </div>
@@ -1161,6 +1181,7 @@ function RFQMarketplace({ onOpen, onCreate, rfqs }) {
                     {b.verification >= 2 && <Badge tone="good">Verified Buyer</Badge>}
                     <Badge tone="neutral">{r.incoterm}</Badge>
                     {r.certRequired && <Badge tone="gold">Cert. required</Badge>}
+                    {r.isDemo && <Badge tone="neutral">Demo</Badge>}
                   </div>
                 </div>
               </div>
@@ -1257,13 +1278,56 @@ function RFQCreate({ onPublish, initial }) {
     destination: initial?.destination || DESTINATIONS[0],
     delivery: "", grade: "Canada No. 1", packaging: "Bulk", incoterm: "CIF", payment: "Letter of Credit", certRequired: true, notes: "",
   });
+  const [authStatus, setAuthStatus] = useState("checking"); // "checking" | "signed-out" | "signed-in"
+  const [profile, setProfile] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const inputStyle = { width: "100%", background: COLORS.s2, border: `1px solid ${COLORS.border}`, borderRadius: 4, padding: "9px 11px", fontSize: 13, color: COLORS.textPri, outline: "none", boxSizing: "border-box" };
   const label = { fontSize: 11.5, color: COLORS.textSec, marginBottom: 5, display: "block" };
 
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getUser().then(async ({ data }) => {
+      if (!data.user) { setAuthStatus("signed-out"); return; }
+      const { data: prof } = await supabase.from("profiles").select("*").eq("id", data.user.id).single();
+      setProfile(prof);
+      setAuthStatus("signed-in");
+    });
+  }, []);
+
+  const submit = async () => {
+    setError("");
+    setSubmitting(true);
+    const result = await onPublish(form);
+    setSubmitting(false);
+    if (result && result.error) setError(result.error);
+  };
+
+  if (authStatus === "checking") {
+    return <div style={{ padding: 40, color: COLORS.textMut, fontSize: 13 }}>Checking your account…</div>;
+  }
+
+  if (authStatus === "signed-out") {
+    return (
+      <div style={{ maxWidth: 480 }}>
+        <SectionLabel sub="Posting a real buying request needs your real OpenExport account — this is a genuine, database-backed post other members can see, not a demo.">Request for Quote</SectionLabel>
+        <Card style={{ textAlign: "center", padding: 32 }}>
+          <FileText size={22} color={COLORS.gold} style={{ marginBottom: 10 }} />
+          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 15, color: COLORS.textPri, marginBottom: 6 }}>Sign in to post a buying request</div>
+          <div style={{ fontSize: 12.5, color: COLORS.textSec, marginBottom: 18 }}>Your request will be publicly visible and saved for real.</div>
+          <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+            <a href="/login" style={{ ...secondaryBtn, textDecoration: "none" }}>Sign In</a>
+            <a href="/signup" style={{ ...primaryBtn, textDecoration: "none" }}>Create Account</a>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div style={{ maxWidth: 620 }}>
-      <SectionLabel sub={initial ? "Pre-filled from your search — review the details below and publish when ready." : undefined}>Request for Quote</SectionLabel>
+      <SectionLabel sub={initial ? "Pre-filled from your search — review the details below and publish when ready." : `Posting as ${profile?.company_name || "you"} — this saves to the real database and is visible to everyone.`}>Request for Quote</SectionLabel>
       <Card>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <div><label style={label}>Product</label><select style={inputStyle} value={form.productId} onChange={(e) => set("productId", e.target.value)}>{PRODUCTS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
@@ -1280,7 +1344,10 @@ function RFQCreate({ onPublish, initial }) {
         </label>
         <label style={label}>Additional notes</label>
         <textarea style={{ ...inputStyle, minHeight: 70 }} value={form.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Any additional requirements…" />
-        <button onClick={() => onPublish(form)} style={{ ...primaryBtn, marginTop: 16, width: "100%", padding: "11px 0" }}>Publish RFQ</button>
+        {error && <div style={{ fontSize: 12.5, color: COLORS.risk, marginTop: 12 }}>{error}</div>}
+        <button onClick={submit} disabled={submitting} style={{ ...primaryBtn, marginTop: 16, width: "100%", padding: "11px 0", opacity: submitting ? 0.6 : 1 }}>
+          {submitting ? "Publishing…" : "Publish RFQ"}
+        </button>
       </Card>
     </div>
   );
@@ -2796,6 +2863,23 @@ export default function App() {
   const [suppliers, setSuppliers] = useState(SUPPLIERS_SEED);
   const [buyers, setBuyers] = useState(BUYERS_SEED);
 
+  // Real buying requests load on top of the demo baseline — real ones
+  // are tagged isDemo:false and sort first; this is genuinely fetched
+  // from and pushed to the database, not simulated.
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.from("rfqs").select("*").order("created_at", { ascending: false }).then(({ data, error }) => {
+      if (!error && data) setRfqs((prev) => [...data.map(dbRfqToLocal), ...prev.filter((r) => r.isDemo)]);
+    });
+    const channel = supabase
+      .channel("rfqs-feed")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "rfqs" }, (payload) => {
+        setRfqs((prev) => [dbRfqToLocal(payload.new), ...prev.filter((r) => r.id !== payload.new.id)]);
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, []);
+
   const logActivity = (entry) => setActivity((a) => [...a, entry]);
 
   const openProduct = (id, supplierId) => { setProductSel({ id, supplierId }); setView("product-detail"); };
@@ -2864,20 +2948,37 @@ export default function App() {
 
   const liveUser = currentUser ? accounts.find((a) => a.id === currentUser.id) || currentUser : null;
 
-  const publishRfq = (form) => {
-    const newRfq = {
-      id: "r" + Date.now(), buyerId: null,
-      buyerName: liveUser ? liveUser.companyName : "Guest Buyer",
-      buyerVerification: liveUser ? (liveUser.status === "active" ? 3 : 1) : 1,
-      productId: form.productId, qty: form.qty, destination: form.destination,
-      destPort: PORTS.dest[form.destination] || "—",
-      delivery: form.delivery || "To be confirmed", grade: form.grade, packaging: form.packaging,
-      incoterm: form.incoterm, payment: form.payment, certRequired: form.certRequired,
-      postedDaysAgo: 0, expiresOn: daysLeft(14), notes: form.notes,
-    };
-    setRfqs((list) => [newRfq, ...list]);
-    logActivity(makeActivity("rfq", newRfq.buyerName, `posted an RFQ for ${form.qty} MT ${PRODUCTS.find((p) => p.id === form.productId)?.name}`, 0));
+  const publishRfq = async (form) => {
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { error: "You need to be signed in to post a buying request." };
+
+    const { data: prof } = await supabase.from("profiles").select("company_name").eq("id", user.id).single();
+
+    const { data, error } = await supabase.from("rfqs").insert({
+      user_id: user.id,
+      company_name: prof?.company_name || "Member",
+      product_id: form.productId,
+      quantity: form.qty,
+      destination: form.destination,
+      delivery_window: form.delivery || null,
+      grade: form.grade || null,
+      packaging: form.packaging || null,
+      incoterm: form.incoterm || null,
+      payment: form.payment || null,
+      cert_required: !!form.certRequired,
+      notes: form.notes || null,
+    }).select().single();
+
+    if (error) return { error: error.message };
+
+    // The Realtime subscription will also deliver this row back to us —
+    // adding it here too just means it appears instantly for whoever
+    // just posted it, without waiting on the round trip.
+    setRfqs((prev) => [dbRfqToLocal(data), ...prev.filter((r) => r.id !== data.id)]);
+    logActivity(makeActivity("rfq", prof?.company_name || "A member", `posted a real RFQ for ${form.qty} MT ${PRODUCTS.find((p) => p.id === form.productId)?.name}`, 0));
     setView("rfqs");
+    return { error: null };
   };
 
   return (
