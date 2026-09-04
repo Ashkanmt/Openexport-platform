@@ -120,7 +120,7 @@ export default function ChatApp() {
   if (loading) return <div style={{ color: "#9AA5B1", padding: 40 }}>Loading…</div>;
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "260px 260px 1fr", height: "calc(100vh - 56px)", background: "#0A0D12" }}>
+    <div style={{ display: "grid", gridTemplateColumns: "260px 260px 1fr", height: "640px", background: "#0A0D12" }}>
       {/* Member directory — anyone signed in can start a conversation with anyone else */}
       <div style={{ borderRight: "1px solid #232A35", overflowY: "auto" }}>
         <div style={sectionHeader}>Members worldwide</div>
